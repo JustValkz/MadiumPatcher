@@ -7,8 +7,8 @@ import ctypes
 import hashlib
 from ctypes import wintypes
 
-VER = "1.2"
-MARK = b"__vpatch2__"
+VER = "1.3"
+MARK = b"__vpatch3__"
 
 WRAP = (
     b'function le(o,e={},t){var _i=window.__TAURI_INTERNALS__.invoke;'
@@ -17,15 +17,8 @@ WRAP = (
     b'return {"valid":true,"reason":null,"expires_at":null,"has_token":true};'
     b'if(o==="validate_roblox_version"||o==="check_roblox_compatibility"'
     b'||o==="check_version_compatibility"||o==="is_version_compatible")return true;'
-    b'if(o==="check_madium_update"||o==="check_update")return _i(o,e,t).then(function(r){'
-    b'if(r&&typeof r==="object"){r.update_available=false;r.roblox_compatible=true;'
-    b'r.files_match=true;r.version_compatible=true;r.valid=true;r.patched=true;r.issue=null}'
-    b'return r});'
     b'if(o==="inspect_roblox_install"||o==="detect_roblox_install")return _i(o,e,t).then(function(r){'
-    b'if(r&&typeof r==="object"){r.valid=true;r.patched=true;r.issue=null;r.files_match=true;'
-    b'r.compatible=true;r.version_match=true;r.is_compatible=true;'
-    b'if(r.version)r.supported_roblox_version=r.version;'
-    b'if(r.files)r.files=r.files.map(function(f){f.installed=true;return f})}'
+    b'if(r&&typeof r==="object"){r.valid=true;r.issue=null}'
     b'return r});return _i(o,e,t)}'
 )
 
@@ -276,7 +269,7 @@ def swap_le(js):
 
 
 def already(js):
-    return MARK in js and b"r.patched=true" in js
+    return MARK in js
 
 
 def patched(js):
