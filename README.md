@@ -1,14 +1,14 @@
 # Madium Patcher
 
-Made by valkz (inspiration by cloudy)
+made  by valkz (inspiration by cloudy)
 
 Just patches your local Madium.exe. Doesn't download anything.
 
-1. Close Madium
-2. If they updated, swap in the new Madium.exe
-3. Run the patcher, hit Patch, then Launch
+1. close  Madium
+2. if they fucking uipdated just liek downlaod the new one from them 
+3. run the patcher also rememebr amke amdium closed, hit Patch, then Launch
 
-Default path is `%LOCALAPPDATA%\Madium\Bin\Madium.exe`
+Default path for madium is `%LOCALAPPDATA%\Madium\Bin\Madium.exe`
 
 ```
 pip install pyinstaller brotli
