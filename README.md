@@ -1,6 +1,7 @@
 # Madium Patcher
 
 made  by valkz (inspiration by cloudy)
+vibecoded some parts for some people who had issues
 
 Just patches your local Madium.exe. Doesn't download anything.
 
