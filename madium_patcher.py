@@ -7,8 +7,10 @@ import ctypes
 import hashlib
 from ctypes import wintypes
 
-VER = "1.3"
+VER = "1.4"
 MARK = b"__vpatch3__"
+DEFAULT = os.path.expanduser("~") + "\\AppData\\Local\\Madium\\Bin\\Madium.exe"
+DL_DIR = os.path.expanduser("~") + "\\Downloads"
 
 WRAP = (
     b'function le(o,e={},t){var _i=window.__TAURI_INTERNALS__.invoke;'
@@ -84,24 +86,68 @@ def pick_folder():
     return None
 
 
+def default_exe():
+    if os.path.exists(DEFAULT):
+        return DEFAULT
+    return None
+
+
 def get_path():
-    p = os.path.expanduser("~") + "\\AppData\\Local\\Madium\\Bin\\Madium.exe"
-    if os.path.exists(p):
+    p = default_exe()
+    if p:
         return p
     print("Madium.exe not found.")
-    print("[1] Browse")
-    print("[2] Enter path")
+    print("[1] Download Madium")
+    print("[2] Browse")
+    print("[3] Enter path")
     print()
     while True:
-        c = input("Select (1-2): ").strip()
+        c = input("Select (1-3): ").strip()
         if c == "1":
+            p = download_madium()
+            if p:
+                return p
+        elif c == "2":
             p = pick_folder()
             if p and os.path.exists(p):
                 return p
-        elif c == "2":
+        elif c == "3":
             p = input("Path: ").strip().strip('"')
             if os.path.exists(p) and p.lower().endswith(".exe"):
                 return p
+
+
+def download_madium():
+    dest = os.path.join(DL_DIR, "Madium.exe")
+    urls = [
+        "https://cdn.getmadium.me/Madium.exe",
+        "https://cdn.getmadium.me/Madium.exe?v=latest",
+        "https://cdn.getmadium.me/releases/latest/Madium.exe",
+        "https://cdn.getmadium.me/app/latest/Madium.exe",
+    ]
+    status("Downloading Madium to Downloads...", "INFO")
+    os.makedirs(DL_DIR, exist_ok=True)
+    for u in urls:
+        r = subprocess.run(
+            ["curl.exe", "-L", "--fail", "-A", "Mozilla/5.0", "-e", "https://getmadium.me/", "-o", dest, u],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0 and os.path.exists(dest) and os.path.getsize(dest) > 1000000:
+            bin_dir = os.path.dirname(DEFAULT)
+            os.makedirs(bin_dir, exist_ok=True)
+            try:
+                open(DEFAULT, "wb").write(open(dest, "rb").read())
+                status("Saved to Downloads and Local\\Madium\\Bin", "SUCCESS")
+                return DEFAULT
+            except:
+                status("Saved to Downloads: " + dest, "SUCCESS")
+                return dest
+    try:
+        os.startfile("https://getmadium.me/")
+    except:
+        pass
+    status("Couldn't grab it automatically, opened getmadium.me", "WARNING")
+    return default_exe()
 
 
 def running():
@@ -269,11 +315,20 @@ def swap_le(js):
 
 
 def already(js):
-    return MARK in js
-
-
-def patched(js):
     return MARK in js or b'if(o==="check_license"||o==="redeem_key"' in js
+
+
+def file_patched(src):
+    try:
+        d = open(src, "rb").read() if isinstance(src, str) else src
+        _, secs = pe_info(d)
+        t = find_chunk(d, secs)
+        if not t:
+            return False
+        js, _, _ = extract(d, t, secs)
+        return js is not None and already(js)
+    except:
+        return False
 
 
 def write_js(d, js, eo, bo, path):
@@ -296,12 +351,12 @@ def do_patch(path, force=False):
     try:
         d = bytearray(open(path, "rb").read())
         bak = path + ".bak"
-        if not patched(bytes(d)):
+        if not file_patched(bytes(d)):
             open(bak, "wb").write(bytes(d))
         elif force and os.path.exists(bak):
             raw = open(bak, "rb").read()
-            if patched(raw):
-                return False, "bak is already patched, drop in a fresh Madium.exe"
+            if file_patched(raw):
+                return False, "bak is already patched, wait for Madium to update itself"
             d = bytearray(raw)
         elif not force:
             _, secs = pe_info(d)
@@ -371,15 +426,30 @@ def main():
             wait()
             return
 
+        d0 = default_exe()
+        if d0:
+            path = d0
+        if os.path.exists(path):
+            if not file_patched(path):
+                status("Found a fresh Madium.exe, patching it...", "INFO")
+                if running():
+                    kill()
+                ok, msg = do_patch(path)
+                status(("Success! " if ok else "Failed: ") + msg, "SUCCESS" if ok else "WARNING")
+                wait()
+
         while True:
+            d0 = default_exe()
+            if d0:
+                path = d0
             header()
             print("Target: %s" % path)
             print()
             print("[1] Patch")
             print("[2] Restore")
             print("[3] Launch")
-            print("[4] Change Target")
-            print("[5] Force Re-patch")
+            print("[4] Download Madium")
+            print("[5] Change Target")
             print("[6] Exit")
             print()
             print("Made by valkz (inspiration by cloudy)")
@@ -389,6 +459,8 @@ def main():
                 status("Running - close before patching!", "WARNING")
             else:
                 status("Not running", "INFO")
+            if os.path.exists(path) and not file_patched(path):
+                status("Madium replaced itself - hit Patch", "WARNING")
             print()
 
             c = ask("Select (1-6): ")
@@ -411,19 +483,16 @@ def main():
                 wait()
             elif c == "4":
                 header()
+                p = download_madium()
+                if p:
+                    path = p
+                wait()
+            elif c == "5":
+                header()
                 np = get_path()
                 if np:
                     path = np
                     status("Target changed!", "SUCCESS")
-                wait()
-            elif c == "5":
-                header()
-                status("Re-patching...", "INFO")
-                print()
-                if running():
-                    kill()
-                ok, msg = do_patch(path, True)
-                status(("Success! " if ok else "Failed: ") + msg, "SUCCESS" if ok else "WARNING")
                 wait()
             elif c == "6":
                 header()
