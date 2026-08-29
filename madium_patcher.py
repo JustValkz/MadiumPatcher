@@ -7,20 +7,18 @@ import struct
 import subprocess
 from ctypes import wintypes
 
-VERSION = "1.0"
+VERSION = "1.2"
 CREDIT = "Made by valkz (inspiration by cloudy)"
-PATCH_MARK = b"__VALKZ_PATCH__"
+PATCH_MARK = b"__VALKZ_PATCH_V2__"
 
-# Intercepts Tauri invoke so setup unlocks on any Roblox / Madium build:
-# license always valid, install marked patched, every file marked installed,
-# version mismatch cleared, Roblox treated as closed.
+# Patches Madium.exe only. Never downloads Madium or client files.
+# When you drop in a new Madium.exe, Patch backs that file up and wraps it.
 LE_WRAPPER = (
     b"function le(o,e={},t){"
     b"var _i=window.__TAURI_INTERNALS__.invoke;"
     b'if(o==="' + PATCH_MARK + b'")return true;'
     b'if(o==="check_license"||o==="redeem_key"||o==="checkLicense"||o==="redeemKey")'
     b'return {"valid":true,"reason":null,"expires_at":null,"has_token":true};'
-    b'if(o==="get_running_roblox_version"||o==="is_roblox_running")return null;'
     b'if(o==="validate_roblox_version"||o==="check_roblox_compatibility"'
     b'||o==="check_version_compatibility"||o==="is_version_compatible")return true;'
     b'if(o==="check_madium_update"||o==="check_update")return _i(o,e,t).then(function(r){'
@@ -33,10 +31,6 @@ LE_WRAPPER = (
     b"if(r.version)r.supported_roblox_version=r.version;"
     b"if(r.files)r.files=r.files.map(function(f){f.installed=true;return f})}"
     b"return r});"
-    b'if(o==="patch_roblox_install"||o==="patch_roblox_version"'
-    b'||o==="install_madium_files"||o==="install_madium"||o==="patch_madium_files")'
-    b'return _i("kill_roblox",{},t).catch(function(){}).then(function(){'
-    b"return _i(o,e,t).catch(function(){return null})});"
     b"return _i(o,e,t)}"
 )
 
@@ -248,7 +242,9 @@ def find_js_paths(data):
         rb"/_app/immutable/chunks/[^/\x00]+\.js",
         rb"/_app/immutable/entry/[^/\x00]+\.js",
         rb"/_app/immutable/nodes/[^/\x00]+\.js",
+        rb"/_app/immutable/assets/[^/\x00]+\.js",
         rb"/_app/immutable/[^/\x00]+\.js",
+        rb"/assets/[^/\x00]+\.js",
     ):
         paths.update(m.decode("utf-8", "ignore") for m in re.findall(pattern, data))
     return paths
@@ -361,37 +357,38 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def ensure_original_backup(path, data):
-    bak = path + ".bak"
-    current_patched = js_looks_patched(bytes(data))
-    if os.path.exists(bak):
-        if current_patched:
-            return bak
-        if sha256_file(bak) != hashlib.sha256(bytes(data)).hexdigest():
-            with open(bak, "wb") as handle:
-                handle.write(bytes(data))
-        return bak
-    if not current_patched:
-        with open(bak, "wb") as handle:
-            handle.write(bytes(data))
-    return bak
+def save_backup(path, data):
+    with open(path + ".bak", "wb") as handle:
+        handle.write(bytes(data))
 
 
 def do_patch(path, force=False):
     try:
-        if force:
-            bak = path + ".bak"
-            if os.path.exists(bak):
-                with open(bak, "rb") as handle:
-                    data = bytearray(handle.read())
-            else:
-                with open(path, "rb") as handle:
-                    data = bytearray(handle.read())
-        else:
-            with open(path, "rb") as handle:
-                data = bytearray(handle.read())
+        with open(path, "rb") as handle:
+            data = bytearray(handle.read())
 
-        ensure_original_backup(path, data)
+        bak = path + ".bak"
+        current_patched = js_looks_patched(bytes(data))
+
+        # New Madium.exe dropped in (unpatched) — always keep that as the backup.
+        # Never restore an old .bak over a freshly replaced exe.
+        if not current_patched:
+            save_backup(path, data)
+        elif force and os.path.exists(bak):
+            with open(bak, "rb") as handle:
+                bak_data = handle.read()
+            if not js_looks_patched(bak_data):
+                data = bytearray(bak_data)
+            else:
+                return False, "backup is already patched; replace Madium.exe with a fresh download first"
+        elif not force:
+            _, secs = pe_info(data)
+            chunk = find_invoke_chunk(data, secs)
+            if chunk:
+                js, _, _ = extract_chunk(bytes(data), chunk, secs)
+                if js is not None and is_current_patch(js):
+                    return True, "already patched"
+
         _, secs = pe_info(data)
         chunk = find_invoke_chunk(data, secs)
         if not chunk:
@@ -505,7 +502,7 @@ def main():
 
             elif choice == "5":
                 print_header()
-                print_status("Force re-patching from backup...", "INFO")
+                print_status("Re-applying patch to this Madium.exe...", "INFO")
                 if is_madium_running():
                     kill_madium()
                 ok, msg = do_patch(path, force=True)
