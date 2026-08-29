@@ -1,83 +1,63 @@
 import brotli
+import os
+import struct
+import re
+import subprocess
 import ctypes
 import hashlib
-import os
-import re
-import struct
-import subprocess
 from ctypes import wintypes
 
-VERSION = "1.2"
-CREDIT = "Made by valkz (inspiration by cloudy)"
-PATCH_MARK = b"__VALKZ_PATCH_V2__"
+VER = "1.2"
+MARK = b"__vpatch2__"
 
-# Patches Madium.exe only. Never downloads Madium or client files.
-# When you drop in a new Madium.exe, Patch backs that file up and wraps it.
-LE_WRAPPER = (
-    b"function le(o,e={},t){"
-    b"var _i=window.__TAURI_INTERNALS__.invoke;"
-    b'if(o==="' + PATCH_MARK + b'")return true;'
+WRAP = (
+    b'function le(o,e={},t){var _i=window.__TAURI_INTERNALS__.invoke;'
+    b'if(o==="' + MARK + b'")return true;'
     b'if(o==="check_license"||o==="redeem_key"||o==="checkLicense"||o==="redeemKey")'
     b'return {"valid":true,"reason":null,"expires_at":null,"has_token":true};'
     b'if(o==="validate_roblox_version"||o==="check_roblox_compatibility"'
     b'||o==="check_version_compatibility"||o==="is_version_compatible")return true;'
     b'if(o==="check_madium_update"||o==="check_update")return _i(o,e,t).then(function(r){'
-    b"if(r&&typeof r===\"object\"){r.update_available=false;r.roblox_compatible=true;"
-    b"r.files_match=true;r.version_compatible=true;r.valid=true;r.patched=true;r.issue=null}"
-    b"return r});"
+    b'if(r&&typeof r==="object"){r.update_available=false;r.roblox_compatible=true;'
+    b'r.files_match=true;r.version_compatible=true;r.valid=true;r.patched=true;r.issue=null}'
+    b'return r});'
     b'if(o==="inspect_roblox_install"||o==="detect_roblox_install")return _i(o,e,t).then(function(r){'
-    b"if(r&&typeof r===\"object\"){r.valid=true;r.patched=true;r.issue=null;r.files_match=true;"
-    b"r.compatible=true;r.version_match=true;r.is_compatible=true;"
-    b"if(r.version)r.supported_roblox_version=r.version;"
-    b"if(r.files)r.files=r.files.map(function(f){f.installed=true;return f})}"
-    b"return r});"
-    b"return _i(o,e,t)}"
+    b'if(r&&typeof r==="object"){r.valid=true;r.patched=true;r.issue=null;r.files_match=true;'
+    b'r.compatible=true;r.version_match=true;r.is_compatible=true;'
+    b'if(r.version)r.supported_roblox_version=r.version;'
+    b'if(r.files)r.files=r.files.map(function(f){f.installed=true;return f})}'
+    b'return r});return _i(o,e,t)}'
 )
 
 
-def enable_ansi():
-    try:
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.GetStdHandle(-11)
-        mode = ctypes.c_uint()
-        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
-    except Exception:
-        pass
-
-
-def c(code, text):
-    return f"\033[{code}m{text}\033[0m"
-
-
-def clear_screen():
+def cls():
     os.system("cls" if os.name == "nt" else "clear")
 
 
-def print_header():
-    clear_screen()
+def col(n, s):
+    return "\033[%sm%s\033[0m" % (n, s)
+
+
+def status(msg, kind="INFO"):
+    c = {"INFO": "94", "SUCCESS": "92", "WARNING": "93", "ERROR": "91"}.get(kind, "0")
+    print("\033[%sm[%s]\033[0m %s" % (c, kind, msg))
+
+
+def header():
+    cls()
     print()
-    print(c("95", "  ╔════════════════════════════════════════════╗"))
-    print(c("95", "  ║") + c("97", "           MADIUM PATCHER") + c("95", "                ║"))
-    print(c("95", "  ║") + c("90", f"                 v{VERSION}") + c("95", "                    ║"))
-    print(c("95", "  ╚════════════════════════════════════════════╝"))
+    print(col("95", "  ╔════════════════════════════════════════════╗"))
+    print(col("95", "  ║") + col("97", "           MADIUM PATCHER") + col("95", "                ║"))
+    print(col("95", "  ║") + col("90", "                 v" + VER) + col("95", "                    ║"))
+    print(col("95", "  ╚════════════════════════════════════════════╝"))
     print()
 
 
-def print_status(message, status="INFO"):
-    colors = {"INFO": "94", "SUCCESS": "92", "WARNING": "93", "ERROR": "91"}
-    print(f"\033[{colors.get(status, '0')}m[{status}]\033[0m {message}")
-
-
-def show_file_picker():
+def pick_folder():
     try:
-        BIF_EDITBOX = 0x0010
-        BIF_NEWDIALOGSTYLE = 0x0040
-        shell32 = ctypes.windll.shell32
-        ole32 = ctypes.windll.ole32
-        lp_buffer = ctypes.create_unicode_buffer(1024)
+        buf = ctypes.create_unicode_buffer(1024)
 
-        class BROWSEINFO(ctypes.Structure):
+        class BI(ctypes.Structure):
             _fields_ = [
                 ("hwndOwner", wintypes.HWND),
                 ("pidlRoot", ctypes.c_void_p),
@@ -89,156 +69,138 @@ def show_file_picker():
                 ("iImage", ctypes.c_int),
             ]
 
-        info = BROWSEINFO()
-        info.pszDisplayName = lp_buffer
-        info.lpszTitle = "Select the folder that contains Madium.exe"
-        info.ulFlags = BIF_EDITBOX | BIF_NEWDIALOGSTYLE
-        result = shell32.SHBrowseForFolderW(ctypes.byref(info))
-        if not result:
+        bi = BI()
+        bi.pszDisplayName = buf
+        bi.lpszTitle = "Select Madium.exe"
+        bi.ulFlags = 0x0010 | 0x0040
+        r = ctypes.windll.shell32.SHBrowseForFolderW(ctypes.byref(bi))
+        if not r:
             return None
-        ole32.CoTaskMemFree(result)
-        folder = lp_buffer.value
+        ctypes.windll.ole32.CoTaskMemFree(r)
+        folder = buf.value
         if not folder:
             return None
-        direct = os.path.join(folder, "Madium.exe")
-        if os.path.exists(direct):
-            return direct
-        for name in os.listdir(folder):
-            if name.lower() == "madium.exe":
-                return os.path.join(folder, name)
-        return None
-    except Exception:
-        return None
+        p = os.path.join(folder, "Madium.exe")
+        if os.path.exists(p):
+            return p
+        for f in os.listdir(folder):
+            if f.lower() == "madium.exe":
+                return os.path.join(folder, f)
+    except:
+        pass
+    return None
 
 
-def get_madium_path():
-    default_path = os.path.join(
-        os.path.expanduser("~"), "AppData", "Local", "Madium", "Bin", "Madium.exe"
-    )
-    if os.path.exists(default_path):
-        return default_path
-
-    print("Madium.exe was not found in the default location.")
-    print("  [1] Browse")
-    print("  [2] Enter path")
+def get_path():
+    p = os.path.expanduser("~") + "\\AppData\\Local\\Madium\\Bin\\Madium.exe"
+    if os.path.exists(p):
+        return p
+    print("Madium.exe not found.")
+    print("[1] Browse")
+    print("[2] Enter path")
     print()
     while True:
-        choice = input("Select (1-2): ").strip()
-        if choice == "1":
-            path = show_file_picker()
-            if path and os.path.exists(path):
-                return path
-            print_status("No Madium.exe in that folder.", "WARNING")
-        elif choice == "2":
-            path = input("Path: ").strip().strip('"')
-            if os.path.exists(path) and path.lower().endswith(".exe"):
-                return path
-            print_status("Invalid path.", "ERROR")
+        c = input("Select (1-2): ").strip()
+        if c == "1":
+            p = pick_folder()
+            if p and os.path.exists(p):
+                return p
+        elif c == "2":
+            p = input("Path: ").strip().strip('"')
+            if os.path.exists(p) and p.lower().endswith(".exe"):
+                return p
 
 
-def is_madium_running():
+def running():
     try:
-        result = subprocess.run(
+        r = subprocess.run(
             ["tasklist", "/FI", "IMAGENAME eq Madium.exe"],
-            capture_output=True,
-            text=True,
-            shell=True,
+            capture_output=True, text=True, shell=True,
         )
-        return "Madium.exe" in result.stdout
-    except Exception:
+        return "Madium.exe" in r.stdout
+    except:
         return False
 
 
-def kill_madium():
+def kill():
     try:
-        if is_madium_running():
-            subprocess.run(
-                ["taskkill", "/F", "/IM", "Madium.exe"],
-                capture_output=True,
-                shell=True,
-            )
+        if running():
+            subprocess.run(["taskkill", "/F", "/IM", "Madium.exe"], capture_output=True, shell=True)
             return True
-        return False
-    except Exception:
-        return False
+    except:
+        pass
+    return False
 
 
-def launch_madium(path):
+def launch(p):
     try:
-        if is_madium_running():
-            print_status("Already running.", "WARNING")
-            return False
-        subprocess.Popen([path], shell=True)
-        print_status("Launched.", "SUCCESS")
-        return True
-    except Exception as exc:
-        print_status(f"Failed: {exc}", "ERROR")
-        return False
+        if running():
+            status("Already running!", "WARNING")
+            return
+        subprocess.Popen([p], shell=True)
+        status("Launched!", "SUCCESS")
+    except Exception as e:
+        status("Failed: %s" % e, "ERROR")
 
 
-def pe_info(data):
-    e = struct.unpack_from("<I", data, 0x3C)[0]
-    n = struct.unpack_from("<H", data, e + 6)[0]
-    o = struct.unpack_from("<H", data, e + 20)[0]
+def pe_info(d):
+    e = struct.unpack_from("<I", d, 0x3C)[0]
+    n = struct.unpack_from("<H", d, e + 6)[0]
+    o = struct.unpack_from("<H", d, e + 20)[0]
     p = e + 24
-    m = struct.unpack_from("<H", data, p)[0]
-    b = struct.unpack_from("<Q" if m == 0x20B else "<I", data, p + (0x18 if m == 0x20B else 0x1C))[0]
+    m = struct.unpack_from("<H", d, p)[0]
+    b = struct.unpack_from("<Q" if m == 0x20B else "<I", d, p + (0x18 if m == 0x20B else 0x1C))[0]
     s = p + o
     secs = []
     for i in range(n):
         off = s + i * 40
         secs.append((
-            b + struct.unpack_from("<I", data, off + 12)[0],
-            struct.unpack_from("<I", data, off + 20)[0],
-            max(
-                struct.unpack_from("<I", data, off + 8)[0],
-                struct.unpack_from("<I", data, off + 16)[0],
-            ),
+            b + struct.unpack_from("<I", d, off + 12)[0],
+            struct.unpack_from("<I", d, off + 20)[0],
+            max(struct.unpack_from("<I", d, off + 8)[0], struct.unpack_from("<I", d, off + 16)[0]),
         ))
     return b, secs
 
 
 def va_to_off(v, secs):
-    for start, raw, size in secs:
-        if start <= v < start + size:
-            return raw + (v - start)
+    for s, r, sz in secs:
+        if s <= v < s + sz:
+            return r + (v - s)
     return None
 
 
 def off_to_va(o, secs):
-    for start, raw, size in secs:
-        if raw <= o < raw + size:
-            return start + (o - raw)
+    for s, r, sz in secs:
+        if r <= o < r + sz:
+            return s + (o - r)
     return None
 
 
-def extract_chunk(data, path, secs):
+def extract(d, p, secs):
     try:
-        pb = path.encode("utf-8")
-        pi = data.find(pb)
+        pb = p.encode("utf-8")
+        pi = d.find(pb)
         if pi < 0:
             return None, None, None
         pv = off_to_va(pi, secs)
         if pv is None:
             return None, None, None
-        ep = struct.pack("<QQ", pv, len(pb))
-        eo = data.find(ep)
+        eo = d.find(struct.pack("<QQ", pv, len(pb)))
         if eo < 0:
             return None, None, None
-        dp = struct.unpack_from("<Q", data, eo + 16)[0]
-        dl = struct.unpack_from("<Q", data, eo + 24)[0]
+        dp = struct.unpack_from("<Q", d, eo + 16)[0]
+        dl = struct.unpack_from("<Q", d, eo + 24)[0]
         bo = va_to_off(dp, secs)
         if bo is None:
             return None, None, None
-        blob = bytes(data[bo:bo + dl])
-        return brotli.decompress(blob), eo, bo
-    except Exception:
+        return brotli.decompress(bytes(d[bo:bo + dl])), eo, bo
+    except:
         return None, None, None
 
 
-def find_js_paths(data):
-    paths = set()
-    for pattern in (
+def js_paths(d):
+    out = set()
+    for pat in (
         rb"/_app/immutable/chunks/[^/\x00]+\.js",
         rb"/_app/immutable/entry/[^/\x00]+\.js",
         rb"/_app/immutable/nodes/[^/\x00]+\.js",
@@ -246,282 +208,243 @@ def find_js_paths(data):
         rb"/_app/immutable/[^/\x00]+\.js",
         rb"/assets/[^/\x00]+\.js",
     ):
-        paths.update(m.decode("utf-8", "ignore") for m in re.findall(pattern, data))
-    return paths
+        for m in re.findall(pat, d):
+            out.add(m.decode("utf-8", "ignore"))
+    return out
 
 
-def find_invoke_chunk(data, secs):
+def find_chunk(d, secs):
     best = None
-    best_score = -1
-    for path in find_js_paths(data):
-        js, _, _ = extract_chunk(data, path, secs)
+    score = -1
+    for p in js_paths(d):
+        js, _, _ = extract(d, p, secs)
         if not js:
             continue
-        score = 0
+        s = 0
         if b"function le(" in js or b"const le=" in js or b"const le =" in js:
-            score += 80
+            s += 80
         if b"__TAURI_INTERNALS__.invoke" in js:
-            score += 40
+            s += 40
         if b"check_license" in js or b"redeem_key" in js:
-            score += 100
-        if b"inspect_roblox_install" in js or b"detect_roblox_install" in js:
-            score += 80
-        if b"patch_roblox_install" in js:
-            score += 40
-        if score > best_score:
-            best_score = score
-            best = path
+            s += 100
+        if b"inspect_roblox_install" in js:
+            s += 80
+        if s > score:
+            score = s
+            best = p
     return best
 
 
-def find_function_span(js, start_pat):
-    match = re.search(start_pat, js)
-    if not match:
+def func_span(js, pat):
+    m = re.search(pat, js)
+    if not m:
         return None
-    start = match.start()
+    i = m.start()
     depth = 1
-    pos = match.end()
-    while pos < len(js) and depth > 0:
-        ch = js[pos:pos + 1]
-        if ch == b"{":
+    p = m.end()
+    while p < len(js) and depth:
+        if js[p:p + 1] == b"{":
             depth += 1
-        elif ch == b"}":
+        elif js[p:p + 1] == b"}":
             depth -= 1
-        pos += 1
-    if depth != 0:
+        p += 1
+    if depth:
         return None
-    return start, pos
+    return i, p
 
 
-def replace_le(js):
-    steps = []
-    span = find_function_span(js, rb"function le\s*\([^)]*\)\s*\{")
-    if span:
-        start, end = span
-        js = js[:start] + LE_WRAPPER + js[end:]
-        steps.append("function-le")
-        return js, steps
+def swap_le(js):
+    sp = func_span(js, rb"function le\s*\([^)]*\)\s*\{")
+    if sp:
+        a, b = sp
+        return js[:a] + WRAP + js[b:], "le"
 
-    const_pat = re.compile(rb"const\s+le\s*=\s*", re.DOTALL)
-    match = const_pat.search(js)
-    if match:
-        end = js.find(b";", match.end())
+    m = re.search(rb"const\s+le\s*=\s*", js)
+    if m:
+        end = js.find(b";", m.end())
         if end != -1:
-            js = js[:match.start()] + b"const le = " + LE_WRAPPER + js[end + 1:]
-            steps.append("const-le")
-            return js, steps
+            return js[:m.start()] + b"const le = " + WRAP + js[end + 1:], "const"
 
-    invoke_wrap = re.compile(
+    m = re.search(
         rb"function\s+\w+\s*\([^)]*\)\s*\{\s*return\s+window\.__TAURI_INTERNALS__\.invoke\([^)]*\)\s*\}",
-        re.DOTALL,
+        js,
     )
-    match = invoke_wrap.search(js)
-    if match:
-        js = js[:match.start()] + LE_WRAPPER + js[match.end():]
-        steps.append("invoke-wrapper")
-        return js, steps
+    if m:
+        return js[:m.start()] + WRAP + js[m.end():], "invoke"
 
-    return None, []
+    return None, None
 
 
-def is_current_patch(js):
-    return PATCH_MARK in js and b"r.patched=true" in js and b"f.installed=true" in js
+def already(js):
+    return MARK in js and b"r.patched=true" in js
 
 
-def js_looks_patched(js):
-    return PATCH_MARK in js or b'if(o==="check_license"||o==="redeem_key"' in js
+def patched(js):
+    return MARK in js or b'if(o==="check_license"||o==="redeem_key"' in js
 
 
-def write_chunk(data, js, entry, blob, path):
-    compressed = brotli.compress(js, quality=11)
-    slot = struct.unpack_from("<Q", data, entry + 24)[0]
-    if len(compressed) > slot:
-        for quality in (10, 9, 7, 5, 3, 1):
-            compressed = brotli.compress(js, quality=quality)
-            if len(compressed) <= slot:
+def write_js(d, js, eo, bo, path):
+    nb = brotli.compress(js, quality=11)
+    slot = struct.unpack_from("<Q", d, eo + 24)[0]
+    if len(nb) > slot:
+        for q in (10, 9, 7, 5, 3, 1):
+            nb = brotli.compress(js, quality=q)
+            if len(nb) <= slot:
                 break
         else:
-            return False, "recompressed larger than slot"
-    data[blob:blob + len(compressed)] = compressed
-    struct.pack_into("<Q", data, entry + 24, len(compressed))
-    with open(path, "wb") as handle:
-        handle.write(data)
+            return False, "too big after compress"
+    d[bo:bo + len(nb)] = nb
+    struct.pack_into("<Q", d, eo + 24, len(nb))
+    open(path, "wb").write(d)
     return True, "ok"
-
-
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def save_backup(path, data):
-    with open(path + ".bak", "wb") as handle:
-        handle.write(bytes(data))
 
 
 def do_patch(path, force=False):
     try:
-        with open(path, "rb") as handle:
-            data = bytearray(handle.read())
-
+        d = bytearray(open(path, "rb").read())
         bak = path + ".bak"
-        current_patched = js_looks_patched(bytes(data))
-
-        # New Madium.exe dropped in (unpatched) — always keep that as the backup.
-        # Never restore an old .bak over a freshly replaced exe.
-        if not current_patched:
-            save_backup(path, data)
+        if not patched(bytes(d)):
+            open(bak, "wb").write(bytes(d))
         elif force and os.path.exists(bak):
-            with open(bak, "rb") as handle:
-                bak_data = handle.read()
-            if not js_looks_patched(bak_data):
-                data = bytearray(bak_data)
-            else:
-                return False, "backup is already patched; replace Madium.exe with a fresh download first"
+            raw = open(bak, "rb").read()
+            if patched(raw):
+                return False, "bak is already patched, drop in a fresh Madium.exe"
+            d = bytearray(raw)
         elif not force:
-            _, secs = pe_info(data)
-            chunk = find_invoke_chunk(data, secs)
-            if chunk:
-                js, _, _ = extract_chunk(bytes(data), chunk, secs)
-                if js is not None and is_current_patch(js):
+            _, secs = pe_info(d)
+            t = find_chunk(d, secs)
+            if t:
+                js, _, _ = extract(bytes(d), t, secs)
+                if js is not None and already(js):
                     return True, "already patched"
 
-        _, secs = pe_info(data)
-        chunk = find_invoke_chunk(data, secs)
-        if not chunk:
-            return False, "no invoke chunk found (this Madium build may use a new layout)"
-        js, entry, blob = extract_chunk(bytes(data), chunk, secs)
+        _, secs = pe_info(d)
+        t = find_chunk(d, secs)
+        if not t:
+            return False, "couldn't find the js chunk"
+        js, eo, bo = extract(bytes(d), t, secs)
         if js is None:
-            return False, "chunk extraction failed"
-
-        if is_current_patch(js) and not force:
+            return False, "extract failed"
+        if already(js) and not force:
             return True, "already patched"
-
-        replaced, steps = replace_le(js)
-        if replaced is None:
-            return False, "could not find invoke wrapper in this build"
-        js = replaced
-
-        ok, msg = write_chunk(data, js, entry, blob, path)
+        js, how = swap_le(js)
+        if js is None:
+            return False, "no le() to wrap"
+        ok, msg = write_js(d, js, eo, bo, path)
         if not ok:
             return False, msg
-        return True, "applied (" + ", ".join(steps) + ")"
-    except Exception as exc:
-        return False, f"error: {exc}"
+        return True, "ok (%s)" % how
+    except Exception as e:
+        return False, str(e)
 
 
-def restore_backup(path):
-    backup_path = path + ".bak"
-    if not os.path.exists(backup_path):
-        print_status("Backup not found.", "ERROR")
-        return False
+def restore(path):
+    bak = path + ".bak"
+    if not os.path.exists(bak):
+        status("Backup not found!", "ERROR")
+        return
     try:
-        kill_madium()
-        with open(backup_path, "rb") as handle:
-            data = handle.read()
-        with open(path, "wb") as handle:
-            handle.write(data)
-        print_status("Restored original Madium.exe.", "SUCCESS")
-        return True
-    except Exception:
-        print_status("Restore failed.", "ERROR")
-        return False
+        kill()
+        open(path, "wb").write(open(bak, "rb").read())
+        status("Restored!", "SUCCESS")
+    except:
+        status("Restore failed!", "ERROR")
 
 
-def safe_input(prompt=""):
+def ask(s=""):
     try:
-        return input(prompt).strip()
-    except (EOFError, RuntimeError):
+        return input(s).strip()
+    except:
         return "6"
 
 
-def pause():
+def wait():
     input("\nPress Enter...")
 
 
 def main():
-    enable_ansi()
     try:
-        print_header()
-        print_status("Looking for Madium.exe...", "INFO")
-        path = get_madium_path()
+        ctypes.windll.kernel32.SetConsoleMode(ctypes.windll.kernel32.GetStdHandle(-11), 7)
+    except:
+        pass
+
+    try:
+        header()
+        status("Welcome", "INFO")
+        print()
+        path = get_path()
         if not path:
-            print_status("No target selected.", "ERROR")
-            pause()
+            status("Nothing selected", "ERROR")
+            wait()
             return
 
         while True:
-            print_header()
-            print(f"  Target  {c('97', path)}")
-            if is_madium_running():
-                print(f"  Status  {c('93', 'Madium is running — close it before patching')}")
+            header()
+            print("Target: %s" % path)
+            print()
+            print("[1] Patch")
+            print("[2] Restore")
+            print("[3] Launch")
+            print("[4] Change Target")
+            print("[5] Force Re-patch")
+            print("[6] Exit")
+            print()
+            print("Made by valkz (inspiration by cloudy)")
+            print("-" * 60)
+            print()
+            if running():
+                status("Running - close before patching!", "WARNING")
             else:
-                print(f"  Status  {c('92', 'Ready')}")
-            print()
-            print("  [1] Patch")
-            print("  [2] Restore")
-            print("  [3] Launch")
-            print("  [4] Change target")
-            print("  [5] Force re-patch")
-            print("  [6] Exit")
-            print()
-            print(c("90", f"  {CREDIT}"))
+                status("Not running", "INFO")
             print()
 
-            choice = safe_input("  Select (1-6): ")
-
-            if choice == "1":
-                print_header()
-                print_status("Patching...", "INFO")
-                if is_madium_running():
-                    kill_madium()
+            c = ask("Select (1-6): ")
+            if c == "1":
+                header()
+                status("Patching...", "INFO")
+                print()
+                if running():
+                    kill()
                 ok, msg = do_patch(path)
-                print_status(("Success. " if ok else "Failed. ") + msg, "SUCCESS" if ok else "WARNING")
-                pause()
-
-            elif choice == "2":
-                print_header()
-                restore_backup(path)
-                pause()
-
-            elif choice == "3":
-                print_header()
-                launch_madium(path)
-                pause()
-
-            elif choice == "4":
-                print_header()
-                new_path = get_madium_path()
-                if new_path:
-                    path = new_path
-                    print_status("Target changed.", "SUCCESS")
-                pause()
-
-            elif choice == "5":
-                print_header()
-                print_status("Re-applying patch to this Madium.exe...", "INFO")
-                if is_madium_running():
-                    kill_madium()
-                ok, msg = do_patch(path, force=True)
-                print_status(("Success. " if ok else "Failed. ") + msg, "SUCCESS" if ok else "WARNING")
-                pause()
-
-            elif choice == "6":
-                print_header()
-                print_status("Bye.", "INFO")
+                status(("Success! " if ok else "Failed: ") + msg, "SUCCESS" if ok else "WARNING")
+                wait()
+            elif c == "2":
+                header()
+                restore(path)
+                wait()
+            elif c == "3":
+                header()
+                launch(path)
+                wait()
+            elif c == "4":
+                header()
+                np = get_path()
+                if np:
+                    path = np
+                    status("Target changed!", "SUCCESS")
+                wait()
+            elif c == "5":
+                header()
+                status("Re-patching...", "INFO")
+                print()
+                if running():
+                    kill()
+                ok, msg = do_patch(path, True)
+                status(("Success! " if ok else "Failed: ") + msg, "SUCCESS" if ok else "WARNING")
+                wait()
+            elif c == "6":
+                header()
+                status("Goodbye!", "INFO")
                 break
             else:
-                print_status("Invalid choice.", "ERROR")
-                pause()
+                status("Invalid!", "ERROR")
+                wait()
     except KeyboardInterrupt:
         print()
-        print_status("Exited.", "INFO")
-    except Exception:
-        print_status("Fatal error.", "ERROR")
-        pause()
+        status("Exited", "INFO")
+    except:
+        status("Fatal error!", "ERROR")
+        wait()
 
 
 if __name__ == "__main__":
